@@ -1,5 +1,6 @@
 import os
 import uuid
+import tempfile
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,36 +14,71 @@ load_dotenv()
 
 # CORS configuration
 app.add_middleware(CORSMiddleware,
-    allow_origins=[os.getenv("ALLOWED_ORIGIN")],  # Adjust this to your needs
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+def get_cookies_path():
+    """Get cookies from local file or YOUTUBE_COOKIES env var."""
+    local_path = os.path.join(os.path.dirname(__file__), 'cookies.txt')
+    if os.path.exists(local_path):
+        return local_path
+
+    cookies_data = os.getenv('YOUTUBE_COOKIES')
+    if cookies_data:
+        tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+        tmp.write(cookies_data)
+        tmp.close()
+        return tmp.name
+
+    return None
+
+
 @app.get("/download")
 async def download_video(url: str = Query(...), format: str = Query("best")):
     try:
-        # Extract metadata
-        with yt_dlp.YoutubeDL({'quiet': True, 'skip_download': True}) as ydl:
+        cookies_path = get_cookies_path()
+
+        base_opts = {
+            'quiet': True,
+            'cookiefile': cookies_path,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['mweb', 'android', 'ios', 'tv_embedded'],
+                }
+            },
+            'user_agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+            'sleep_interval': 1,
+            'max_sleep_interval': 5,
+            'proxy': os.getenv('PROXY_URL'),  # Optional: set in Railway vars
+        }
+
+        # Remove None values so yt-dlp doesn't choke
+        base_opts = {k: v for k, v in base_opts.items() if v is not None}
+
+        # Extract metadata first
+        with yt_dlp.YoutubeDL({**base_opts, 'skip_download': True}) as ydl:
             info = ydl.extract_info(url, download=False)
             title = info.get("title", "video").replace("/", "-").replace("\\", "-")
-            extension = "mp4"  # fallback extension
-            filename = f"{title}.{extension}"
+            filename = f"{title}.mp4"
 
         # Create a unique output template
         uid = uuid.uuid4().hex[:8]
         output_template = f"/tmp/{uid}.%(ext)s"
 
         ydl_opts = {
+            **base_opts,
             'format': format,
             'outtmpl': output_template,
-            'quiet': True,
             'merge_output_format': 'mp4',
         }
 
-        # Download the video using yt-dlp Python API
+        # Download the video
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            result = ydl.download([url])
+            ydl.download([url])
 
         # Find actual downloaded file
         actual_file_path = None

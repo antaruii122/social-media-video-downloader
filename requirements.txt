@@ -1,5 +1,7 @@
 fastapi
 uvicorn
 yt-dlp
+yt-dlp-get-pot
+bgutil-ytdlp-pot-provider
 python-multipart
 python-dotenv
